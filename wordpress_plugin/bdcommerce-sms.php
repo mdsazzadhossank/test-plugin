@@ -3,7 +3,7 @@
  * Plugin Name: BdCommerce SMS Manager
  * Plugin URI:  https://bdcommerce.com
  * Description: A complete SMS & Customer Management solution. Sync customers and send Bulk SMS by relaying requests through your Main Dashboard. Includes Live Capture.
- * Version:     1.3.0
+ * Version:     1.4.0
  * Author:      BdCommerce
  * License:     GPL2
  */
@@ -90,13 +90,67 @@ class BDC_SMS_Manager {
     }
 
     /**
+     * Helper: Normalize Dashboard URL
+     */
+    private function get_api_base_url() {
+        $dashboard_url = get_option( 'bdc_dashboard_url' );
+        if ( empty( $dashboard_url ) ) return null;
+
+        $clean_url = preg_replace('/\/[a-zA-Z0-9_-]+\.php$/', '', $dashboard_url);
+        $base_url = rtrim( $clean_url, '/' );
+        
+        if ( substr( $base_url, -3 ) === 'api' ) {
+             return $base_url;
+        } else {
+             return $base_url . '/api';
+        }
+    }
+
+    /**
+     * Fetch Feature Flags from Dashboard API
+     * Caches result for 5 minutes to avoid API spam on checkout
+     */
+    private function get_remote_features() {
+        $api_base = $this->get_api_base_url();
+        if ( ! $api_base ) return [];
+
+        // Check transient (cache)
+        $cached_features = get_transient('bdc_remote_features');
+        if ( false !== $cached_features ) {
+            return $cached_features;
+        }
+
+        $response = wp_remote_get( $api_base . '/features.php', array( 'timeout' => 5, 'sslverify' => false ) );
+        
+        if ( is_wp_error( $response ) ) return [];
+
+        $body = wp_remote_retrieve_body( $response );
+        $features = json_decode( $body, true );
+
+        if ( is_array( $features ) ) {
+            // Cache for 5 minutes
+            set_transient( 'bdc_remote_features', $features, 5 * MINUTE_IN_SECONDS );
+            return $features;
+        }
+
+        return [];
+    }
+
+    /**
      * Inject Live Capture Script on Checkout
+     * Only if 'live_capture' is enabled in Dashboard
      */
     public function inject_live_capture_script() {
         if ( ! is_checkout() || is_order_received_page() ) return;
 
         $api_base = $this->get_api_base_url();
         if ( ! $api_base ) return;
+
+        // Check Remote Feature Flag
+        $features = $this->get_remote_features();
+        if ( empty($features['live_capture']) || $features['live_capture'] !== true ) {
+            return; // Feature is disabled in dashboard, do not load script
+        }
 
         // Get Cart Items
         $cart_items = [];
@@ -146,7 +200,7 @@ class BDC_SMS_Manager {
                                 cart_total: cartTotal
                             }),
                             success: function(res) {
-                                console.log('Lead captured', res);
+                                // console.log('Lead captured', res);
                             }
                         });
                     }
@@ -154,7 +208,7 @@ class BDC_SMS_Manager {
 
                 $('form.checkout').on('input', 'input', function() {
                     clearTimeout(debounceTimer);
-                    debounceTimer = setTimeout(captureData, 1500); // Wait 1.5s after typing stops
+                    debounceTimer = setTimeout(captureData, 1000); // 1s debounce
                 });
             });
         })(jQuery);
@@ -162,25 +216,6 @@ class BDC_SMS_Manager {
         <?php
     }
 
-    /**
-     * Helper: Normalize Dashboard URL
-     */
-    private function get_api_base_url() {
-        $dashboard_url = get_option( 'bdc_dashboard_url' );
-        if ( empty( $dashboard_url ) ) return null;
-
-        $clean_url = preg_replace('/\/[a-zA-Z0-9_-]+\.php$/', '', $dashboard_url);
-        $base_url = rtrim( $clean_url, '/' );
-        
-        if ( substr( $base_url, -3 ) === 'api' ) {
-             return $base_url;
-        } else {
-             return $base_url . '/api';
-        }
-    }
-
-    // ... (Existing Methods: check_connection, ajax_sync_customers, ajax_send_sms, render_dashboard - kept same)
-    
     private function check_connection() {
         $api_base = $this->get_api_base_url();
         if (!$api_base) return false;
@@ -199,7 +234,7 @@ class BDC_SMS_Manager {
         foreach ( $orders as $order ) {
             $phone = preg_replace( '/[^0-9]/', '', $order->get_billing_phone() );
             if ( empty( $phone ) ) continue;
-            // Standardize BD Numbers logic here...
+            
             $exists = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $this->table_name WHERE phone = %s", $phone ) );
             if ( $exists ) {
                 $wpdb->update($this->table_name, array('name' => $order->get_billing_first_name().' '.$order->get_billing_last_name(), 'email' => $order->get_billing_email(), 'last_order_date' => $order->get_date_created()->date('Y-m-d H:i:s')), array('id' => $exists->id));
@@ -208,7 +243,7 @@ class BDC_SMS_Manager {
                 $count++;
             }
         }
-        // Recalc totals logic...
+        
         wp_send_json_success( "$count new customers imported." );
     }
 
@@ -243,8 +278,12 @@ class BDC_SMS_Manager {
         global $wpdb;
         $customers = $wpdb->get_results( "SELECT * FROM $this->table_name ORDER BY id DESC" );
         $is_connected = $this->check_connection();
-        // ... (Render HTML same as before) ...
-        include(plugin_dir_path(__FILE__) . 'admin-view.php'); // Moved HTML to separate file for brevity in this snippet if needed, or keep inline.
+        
+        // Retrieve feature flags to pass to the view
+        $features = $this->get_remote_features();
+        
+        // Pass variables to view
+        include(plugin_dir_path(__FILE__) . 'admin-view.php');
     }
 }
 

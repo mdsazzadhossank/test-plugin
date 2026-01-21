@@ -3,6 +3,13 @@
 // Allow access to variables from render_dashboard
 $is_connected = isset($is_connected) ? $is_connected : false;
 $customers = isset($customers) ? $customers : [];
+// $features is passed from the main class
+$features = isset($features) ? $features : [];
+
+// Helper to check feature status
+function is_feature_active($key, $features) {
+    return isset($features[$key]) && $features[$key] == true;
+}
 ?>
 <div class="wrap font-sans">
     <h1 class="wp-heading-inline text-2xl font-bold text-gray-800 mb-6">BdCommerce SMS Manager</h1>
@@ -19,11 +26,15 @@ $customers = isset($customers) ? $customers : [];
                     <span class="text-sm font-bold text-red-600">Disconnected. Check Dashboard URL.</span>
                 <?php endif; ?>
             </div>
+            <div class="text-xs text-gray-500">
+                Ver: 1.4.0
+            </div>
         </div>
 
         <!-- Tabs Navigation -->
         <div class="flex border-b border-gray-200 bg-white">
             <button onclick="switchTab('customers')" id="tab-customers" class="tab-btn px-6 py-4 text-sm font-bold text-orange-600 border-b-2 border-orange-600 bg-white focus:outline-none">Customers</button>
+            <button onclick="switchTab('features')" id="tab-features" class="tab-btn px-6 py-4 text-sm font-bold text-gray-500 hover:text-gray-700 focus:outline-none">Features & Modules</button>
             <button onclick="switchTab('send-sms')" id="tab-send-sms" class="tab-btn px-6 py-4 text-sm font-bold text-gray-500 hover:text-gray-700 focus:outline-none">Send SMS</button>
             <button onclick="switchTab('settings')" id="tab-settings" class="tab-btn px-6 py-4 text-sm font-bold text-gray-500 hover:text-gray-700 focus:outline-none">Settings</button>
         </div>
@@ -72,6 +83,83 @@ $customers = isset($customers) ? $customers : [];
                         <?php endif; ?>
                     </tbody>
                 </table>
+            </div>
+        </div>
+
+        <!-- Tab Content: Features (NEW) -->
+        <div id="content-features" class="tab-content p-6 hidden">
+            <div class="mb-6">
+                <h2 class="text-xl font-bold text-gray-800">Active Modules</h2>
+                <p class="text-sm text-gray-500">Manage these features from your <a href="#" class="text-orange-600 hover:underline">Central Dashboard</a>. Changes take effect immediately.</p>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Live Capture -->
+                <div class="border rounded-lg p-5 <?php echo is_feature_active('live_capture', $features) ? 'bg-white border-green-200' : 'bg-gray-50 border-gray-200 grayscale opacity-80'; ?>">
+                    <div class="flex justify-between items-start mb-3">
+                        <div class="flex items-center gap-3">
+                            <span class="dashicons dashicons-visibility text-2xl text-orange-600"></span>
+                            <h3 class="font-bold text-gray-800 text-lg">Live Lead Capture</h3>
+                        </div>
+                        <?php if(is_feature_active('live_capture', $features)): ?>
+                            <span class="bg-green-100 text-green-800 text-xs font-bold px-2 py-1 rounded-full border border-green-200">ACTIVE</span>
+                        <?php else: ?>
+                            <span class="bg-gray-200 text-gray-600 text-xs font-bold px-2 py-1 rounded-full border border-gray-300">INACTIVE</span>
+                        <?php endif; ?>
+                    </div>
+                    <p class="text-sm text-gray-600 mb-3">Automatically captures customer data (Phone, Name) as they type in the checkout form. View incomplete orders in Dashboard.</p>
+                    <div class="text-xs text-gray-400">
+                        Status: <?php echo is_feature_active('live_capture', $features) ? '<span class="text-green-600">Script Injected</span>' : 'Script Disabled'; ?>
+                    </div>
+                </div>
+
+                <!-- Fraud Guard -->
+                <div class="border rounded-lg p-5 <?php echo is_feature_active('fraud_guard', $features) ? 'bg-white border-green-200' : 'bg-gray-50 border-gray-200 grayscale opacity-80'; ?>">
+                    <div class="flex justify-between items-start mb-3">
+                        <div class="flex items-center gap-3">
+                            <span class="dashicons dashicons-shield text-2xl text-blue-600"></span>
+                            <h3 class="font-bold text-gray-800 text-lg">Fraud Guard AI</h3>
+                        </div>
+                        <?php if(is_feature_active('fraud_guard', $features)): ?>
+                            <span class="bg-green-100 text-green-800 text-xs font-bold px-2 py-1 rounded-full border border-green-200">ACTIVE</span>
+                        <?php else: ?>
+                            <span class="bg-gray-200 text-gray-600 text-xs font-bold px-2 py-1 rounded-full border border-gray-300">INACTIVE</span>
+                        <?php endif; ?>
+                    </div>
+                    <p class="text-sm text-gray-600 mb-3">Prevents fake orders by analyzing phone number validity, order history, and IP address. Blocks known bad actors.</p>
+                </div>
+
+                <!-- SMS Automation -->
+                <div class="border rounded-lg p-5 <?php echo is_feature_active('sms_automation', $features) ? 'bg-white border-green-200' : 'bg-gray-50 border-gray-200 grayscale opacity-80'; ?>">
+                    <div class="flex justify-between items-start mb-3">
+                        <div class="flex items-center gap-3">
+                            <span class="dashicons dashicons-email-alt text-2xl text-purple-600"></span>
+                            <h3 class="font-bold text-gray-800 text-lg">SMS Automation</h3>
+                        </div>
+                        <?php if(is_feature_active('sms_automation', $features)): ?>
+                            <span class="bg-green-100 text-green-800 text-xs font-bold px-2 py-1 rounded-full border border-green-200">ACTIVE</span>
+                        <?php else: ?>
+                            <span class="bg-gray-200 text-gray-600 text-xs font-bold px-2 py-1 rounded-full border border-gray-300">INACTIVE</span>
+                        <?php endif; ?>
+                    </div>
+                    <p class="text-sm text-gray-600 mb-3">Sends automated SMS for order status changes (Pending, Processing, Completed) based on templates set in Dashboard.</p>
+                </div>
+
+                <!-- Pixel / CAPI -->
+                <div class="border rounded-lg p-5 <?php echo is_feature_active('pixel_capi', $features) ? 'bg-white border-green-200' : 'bg-gray-50 border-gray-200 grayscale opacity-80'; ?>">
+                    <div class="flex justify-between items-start mb-3">
+                        <div class="flex items-center gap-3">
+                            <span class="dashicons dashicons-chart-line text-2xl text-teal-600"></span>
+                            <h3 class="font-bold text-gray-800 text-lg">Facebook Pixel & CAPI</h3>
+                        </div>
+                        <?php if(is_feature_active('pixel_capi', $features)): ?>
+                            <span class="bg-green-100 text-green-800 text-xs font-bold px-2 py-1 rounded-full border border-green-200">ACTIVE</span>
+                        <?php else: ?>
+                            <span class="bg-gray-200 text-gray-600 text-xs font-bold px-2 py-1 rounded-full border border-gray-300">INACTIVE</span>
+                        <?php endif; ?>
+                    </div>
+                    <p class="text-sm text-gray-600 mb-3">Server-side tracking for Facebook Events with advanced matching. Improves ad performance and tracking accuracy.</p>
+                </div>
             </div>
         </div>
 
