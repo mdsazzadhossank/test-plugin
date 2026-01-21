@@ -16,7 +16,9 @@ import {
   ExternalLink,
   ChevronDown,
   X,
-  Map
+  Map,
+  ShieldAlert,
+  ShieldCheck
 } from 'lucide-react';
 import { Order, WCStatus } from '../types';
 import { createSteadfastOrder, saveTrackingLocally } from '../services/courierService';
@@ -32,6 +34,10 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({ order, onBack 
   const [shippingResult, setShippingResult] = useState<{tracking: string, courier: string} | null>(
     order.courier_tracking_code ? {tracking: order.courier_tracking_code, courier: order.courier_name || 'Steadfast'} : null
   );
+
+  // Fraud Check State
+  const [fraudData, setFraudData] = useState<{success_rate: number, total_orders: number, delivered: number, cancelled: number} | null>(null);
+  const [loadingFraud, setLoadingFraud] = useState(false);
 
   // Pathao Modal State
   const [showPathaoModal, setShowPathaoModal] = useState(false);
@@ -147,6 +153,24 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({ order, onBack 
       alert("Pathao Error: " + e.message);
     } finally {
       setIsShipping(false);
+    }
+  };
+
+  const checkFraud = async () => {
+    setLoadingFraud(true);
+    try {
+        const res = await fetch(`api/check_fraud.php?phone=${order.customer.phone}`);
+        const data = await res.json();
+        if (data && !data.error) {
+            setFraudData(data);
+        } else {
+            alert("Could not fetch data or no history found.");
+        }
+    } catch (e) {
+        console.error(e);
+        alert("API Error");
+    } finally {
+        setLoadingFraud(false);
     }
   };
 
@@ -472,9 +496,40 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({ order, onBack 
               <Search size={16} className="text-gray-400" />
               <h4 className="text-sm font-medium text-gray-700">Check Customer Fraud History</h4>
             </div>
-            <button className="w-full py-2 border border-red-400 text-red-500 rounded-full text-xs font-bold hover:bg-red-50 transition-colors">
-              Check Now
-            </button>
+            {!fraudData ? (
+                <button 
+                    onClick={checkFraud}
+                    disabled={loadingFraud}
+                    className="w-full py-2 border border-red-400 text-red-500 rounded-full text-xs font-bold hover:bg-red-50 transition-colors flex items-center justify-center gap-2"
+                >
+                    {loadingFraud ? <Loader2 size={12} className="animate-spin" /> : null}
+                    Check Now
+                </button>
+            ) : (
+                <div className="space-y-3 animate-in fade-in">
+                    <div className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                        <div className="flex items-center gap-2">
+                            {fraudData.success_rate > 80 ? (
+                                <ShieldCheck size={20} className="text-green-600" />
+                            ) : (
+                                <ShieldAlert size={20} className="text-red-600" />
+                            )}
+                            <div>
+                                <p className="text-[10px] font-bold text-gray-500 uppercase">Success Rate</p>
+                                <p className={`text-lg font-black ${fraudData.success_rate > 80 ? 'text-green-600' : 'text-red-600'}`}>
+                                    {fraudData.success_rate}%
+                                </p>
+                            </div>
+                        </div>
+                        <div className="text-right text-xs">
+                            <p className="font-bold text-gray-700">{fraudData.total_orders} Orders</p>
+                            <p className="text-green-600">{fraudData.delivered} Deliv.</p>
+                            <p className="text-red-500">{fraudData.cancelled} Cancel</p>
+                        </div>
+                    </div>
+                    <button onClick={() => setFraudData(null)} className="text-[10px] text-gray-400 underline w-full text-center">Reset Check</button>
+                </div>
+            )}
           </div>
         </div>
       </div>

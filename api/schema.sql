@@ -42,3 +42,13 @@ CREATE TABLE IF NOT EXISTS `incomplete_orders` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `session_id` (`session_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Fraud Check Cache
+CREATE TABLE IF NOT EXISTS `fraud_check_cache` (
+  `phone` varchar(20) NOT NULL,
+  `data` json DEFAULT NULL,
+  `success_rate` decimal(5,2) DEFAULT 0.00,
+  `total_orders` int(11) DEFAULT 0,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`phone`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

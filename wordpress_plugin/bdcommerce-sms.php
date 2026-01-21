@@ -2,8 +2,8 @@
 /**
  * Plugin Name: BdCommerce SMS Manager
  * Plugin URI:  https://bdcommerce.com
- * Description: A complete SMS & Customer Management solution. Sync customers and send Bulk SMS by relaying requests through your Main Dashboard. Includes Live Capture.
- * Version:     1.4.0
+ * Description: A complete SMS & Customer Management solution. Sync customers and send Bulk SMS by relaying requests through your Main Dashboard. Includes Live Capture & Fraud Check.
+ * Version:     1.5.0
  * Author:      BdCommerce
  * License:     GPL2
  */
@@ -32,6 +32,10 @@ class BDC_SMS_Manager {
 
         // Live Capture Injection
         add_action( 'wp_footer', array( $this, 'inject_live_capture_script' ) );
+
+        // WooCommerce Order Column Hook (Fraud Check)
+        add_filter( 'manage_edit-shop_order_columns', array( $this, 'add_fraud_check_column' ) );
+        add_action( 'manage_shop_order_posts_custom_column', array( $this, 'render_fraud_check_column' ), 10, 2 );
     }
 
     /**
@@ -83,10 +87,72 @@ class BDC_SMS_Manager {
      * Enqueue Scripts and Styles
      */
     public function enqueue_assets( $hook ) {
-        if ( 'toplevel_page_bdc-sms-manager' !== $hook ) {
-            return;
+        if ( 'toplevel_page_bdc-sms-manager' === $hook || 'edit.php' === $hook ) {
+            wp_enqueue_script( 'tailwindcss', 'https://cdn.tailwindcss.com', array(), '3.0', false );
+            
+            // Script for Fraud Check Column (Only on order list page)
+            if( 'edit.php' === $hook && isset($_GET['post_type']) && $_GET['post_type'] === 'shop_order' ) {
+                $api_base = $this->get_api_base_url();
+                if($api_base) {
+                    wp_add_inline_script('jquery', '
+                        jQuery(document).ready(function($) {
+                            $(".bdc-fraud-check-btn").on("click", function(e) {
+                                e.preventDefault();
+                                var btn = $(this);
+                                var phone = btn.data("phone");
+                                var target = btn.closest("div");
+                                
+                                btn.text("Checking...");
+                                
+                                $.get("' . esc_url($api_base . '/check_fraud.php') . '?phone=" + phone, function(data) {
+                                    if(data.error) {
+                                        target.html("<span style=\"color:red\">Error</span>");
+                                        return;
+                                    }
+                                    var color = data.success_rate > 80 ? "green" : (data.success_rate > 50 ? "orange" : "red");
+                                    var html = "<div style=\"font-weight:bold; color:" + color + "\">" + data.success_rate + "% Success</div>";
+                                    html += "<div style=\"font-size:10px; color:#666\">" + data.delivered + "/" + data.total_orders + " Delivered</div>";
+                                    target.html(html);
+                                }).fail(function() {
+                                    target.html("<span style=\"color:red\">Failed</span>");
+                                });
+                            });
+                        });
+                    ');
+                }
+            }
         }
-        wp_enqueue_script( 'tailwindcss', 'https://cdn.tailwindcss.com', array(), '3.0', false );
+    }
+
+    /**
+     * Add Custom Column to Orders
+     */
+    public function add_fraud_check_column( $columns ) {
+        $new_columns = array();
+        foreach ( $columns as $key => $column ) {
+            $new_columns[$key] = $column;
+            if ( 'order_total' === $key ) {
+                $new_columns['bdc_fraud_check'] = __( 'Fraud Check', 'bdc-sms' );
+            }
+        }
+        return $new_columns;
+    }
+
+    /**
+     * Render Custom Column Data
+     */
+    public function render_fraud_check_column( $column, $post_id ) {
+        if ( 'bdc_fraud_check' === $column ) {
+            $order = wc_get_order( $post_id );
+            if ( $order ) {
+                $phone = $order->get_billing_phone();
+                if($phone) {
+                    echo '<div><button class="button small bdc-fraud-check-btn" data-phone="'.esc_attr($phone).'">Check</button></div>';
+                } else {
+                    echo '<span class="description">No Phone</span>';
+                }
+            }
+        }
     }
 
     /**
@@ -108,13 +174,11 @@ class BDC_SMS_Manager {
 
     /**
      * Fetch Feature Flags from Dashboard API
-     * Caches result for 5 minutes to avoid API spam on checkout
      */
     private function get_remote_features() {
         $api_base = $this->get_api_base_url();
         if ( ! $api_base ) return [];
 
-        // Check transient (cache)
         $cached_features = get_transient('bdc_remote_features');
         if ( false !== $cached_features ) {
             return $cached_features;
@@ -128,7 +192,6 @@ class BDC_SMS_Manager {
         $features = json_decode( $body, true );
 
         if ( is_array( $features ) ) {
-            // Cache for 5 minutes
             set_transient( 'bdc_remote_features', $features, 5 * MINUTE_IN_SECONDS );
             return $features;
         }
@@ -138,7 +201,6 @@ class BDC_SMS_Manager {
 
     /**
      * Inject Live Capture Script on Checkout
-     * Only if 'live_capture' is enabled in Dashboard
      */
     public function inject_live_capture_script() {
         if ( ! is_checkout() || is_order_received_page() ) return;
@@ -146,13 +208,11 @@ class BDC_SMS_Manager {
         $api_base = $this->get_api_base_url();
         if ( ! $api_base ) return;
 
-        // Check Remote Feature Flag
         $features = $this->get_remote_features();
         if ( empty($features['live_capture']) || $features['live_capture'] !== true ) {
-            return; // Feature is disabled in dashboard, do not load script
+            return;
         }
 
-        // Get Cart Items
         $cart_items = [];
         if ( WC()->cart ) {
             foreach ( WC()->cart->get_cart() as $cart_item ) {
@@ -279,10 +339,8 @@ class BDC_SMS_Manager {
         $customers = $wpdb->get_results( "SELECT * FROM $this->table_name ORDER BY id DESC" );
         $is_connected = $this->check_connection();
         
-        // Retrieve feature flags to pass to the view
         $features = $this->get_remote_features();
         
-        // Pass variables to view
         include(plugin_dir_path(__FILE__) . 'admin-view.php');
     }
 }
