@@ -11,8 +11,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 include 'db.php';
 
+// --- AUTO-CREATE TABLE IF NOT EXISTS ---
+$conn->query("CREATE TABLE IF NOT EXISTS fraud_check_cache (
+    phone VARCHAR(20) PRIMARY KEY,
+    data JSON DEFAULT NULL,
+    success_rate DECIMAL(5,2) DEFAULT 0.00,
+    total_orders INT(11) DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+)");
+// ---------------------------------------
+
 // Helper: Get Settings
 function getSetting($conn, $key) {
+    // Ensure settings table exists (Redundant check but safe)
+    $conn->query("CREATE TABLE IF NOT EXISTS settings (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        setting_key VARCHAR(50) UNIQUE NOT NULL,
+        setting_value TEXT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )");
+
     $stmt = $conn->prepare("SELECT setting_value FROM settings WHERE setting_key = ?");
     $stmt->bind_param("s", $key);
     $stmt->execute();
@@ -63,13 +81,26 @@ if (!$force_refresh) {
     
     if ($result->num_rows > 0) {
         $row = $result->fetch_assoc();
+        $details = json_decode($row['data'], true);
+        
+        // Recalculate delivered/cancelled from cached details if simple counts are needed but not stored separately
+        $delivered = 0;
+        $cancelled = 0;
+        
+        // Try to parse from cached breakdown string if possible, otherwise use success rate approximation
+        // Or assume the frontend uses the 'details' array to show list.
+        // For simple backward compat, we return calculated fields.
+        
+        // Since we didn't store raw counts in columns, let's extract from details text or approximation
+        // Ideally, we should add columns to the table, but let's stick to existing schema.
+        
         echo json_encode([
             "source" => "cache",
             "success_rate" => (float)$row['success_rate'],
             "total_orders" => (int)$row['total_orders'],
-            "delivered" => 0, 
-            "cancelled" => 0,
-            "details" => json_decode($row['data'], true)
+            "delivered" => round(((float)$row['success_rate'] / 100) * (int)$row['total_orders']), // Approximate
+            "cancelled" => (int)$row['total_orders'] - round(((float)$row['success_rate'] / 100) * (int)$row['total_orders']),
+            "details" => $details
         ]);
         exit;
     }
@@ -143,21 +174,53 @@ if ($steadfastConfig && !empty($steadfastConfig['email']) && !empty($steadfastCo
         curl_close($ch);
         
         $data = json_decode($checkResp, true);
-        if ($data) {
-            $del = isset($data['total_delivered']) ? (int)$data['total_delivered'] : 0;
-            $can = isset($data['total_cancelled']) ? (int)$data['total_cancelled'] : 0;
-            $tot = $del + $can; // Or total_parcel if available
-            
-            $history['delivered'] += $del;
-            $history['cancelled'] += $can;
-            $history['total'] += $tot;
-            
-            if ($tot > 0) {
-                $history['breakdown'][] = [
-                    'courier' => 'Steadfast (Global)',
-                    'status' => "Delivered: $del | Cancelled: $can"
-                ];
+        
+        $s_del = 0;
+        $s_can = 0;
+        $s_tot = 0;
+
+        // Logic 1: Summary Keys
+        if (isset($data['total_delivered'])) {
+            $s_del = (int)$data['total_delivered'];
+            $s_can = isset($data['total_cancelled']) ? (int)$data['total_cancelled'] : 0;
+            $s_tot = $s_del + $s_can;
+        } 
+        // Logic 2: Consignment List (Manually Count)
+        elseif (isset($data['consignments']) && is_array($data['consignments'])) {
+            foreach ($data['consignments'] as $c) {
+                $status = strtolower($c['status'] ?? '');
+                $s_tot++;
+                if (strpos($status, 'delivered') !== false) {
+                    $s_del++;
+                } elseif (strpos($status, 'cancelled') !== false || strpos($status, 'return') !== false) {
+                    $s_can++;
+                }
             }
+        }
+        // Logic 3: Root Array (Sometimes simple list)
+        elseif (is_array($data)) {
+             foreach ($data as $c) {
+                if (isset($c['status'])) {
+                    $status = strtolower($c['status']);
+                    $s_tot++;
+                    if (strpos($status, 'delivered') !== false) {
+                        $s_del++;
+                    } elseif (strpos($status, 'cancelled') !== false || strpos($status, 'return') !== false) {
+                        $s_can++;
+                    }
+                }
+            }
+        }
+
+        if ($s_tot > 0) {
+            $history['delivered'] += $s_del;
+            $history['cancelled'] += $s_can;
+            $history['total'] += $s_tot;
+            
+            $history['breakdown'][] = [
+                'courier' => 'Steadfast (Global)',
+                'status' => "Delivered: $s_del | Cancelled: $s_can"
+            ];
         }
     }
 }

@@ -18,7 +18,8 @@ import {
   X,
   Map,
   ShieldAlert,
-  ShieldCheck
+  ShieldCheck,
+  AlertTriangle
 } from 'lucide-react';
 import { Order, WCStatus } from '../types';
 import { createSteadfastOrder, saveTrackingLocally } from '../services/courierService';
@@ -507,24 +508,35 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({ order, onBack 
                 </button>
             ) : (
                 <div className="space-y-3 animate-in fade-in">
-                    <div className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
-                        <div className="flex items-center gap-2">
-                            {fraudData.success_rate > 80 ? (
-                                <ShieldCheck size={20} className="text-green-600" />
-                            ) : (
-                                <ShieldAlert size={20} className="text-red-600" />
-                            )}
-                            <div>
-                                <p className="text-[10px] font-bold text-gray-500 uppercase">Success Rate</p>
-                                <p className={`text-lg font-black ${fraudData.success_rate > 80 ? 'text-green-600' : 'text-red-600'}`}>
-                                    {fraudData.success_rate}%
-                                </p>
+                    <div className="flex flex-col gap-3 p-3 bg-gray-50 rounded-lg">
+                        <div className="flex justify-between items-start">
+                            <div className="flex items-center gap-2">
+                                {fraudData.success_rate > 80 ? (
+                                    <ShieldCheck size={24} className="text-green-600" />
+                                ) : (
+                                    <ShieldAlert size={24} className="text-red-600" />
+                                )}
+                                <div>
+                                    <p className="text-[10px] font-bold text-gray-500 uppercase">Success Rate</p>
+                                    <p className={`text-xl font-black ${fraudData.success_rate > 80 ? 'text-green-600' : 'text-red-600'}`}>
+                                        {fraudData.success_rate}%
+                                    </p>
+                                </div>
+                            </div>
+                            <div className="text-right">
+                                <p className="text-xs font-bold text-gray-700">{fraudData.total_orders} Orders</p>
                             </div>
                         </div>
-                        <div className="text-right text-xs">
-                            <p className="font-bold text-gray-700">{fraudData.total_orders} Orders</p>
-                            <p className="text-green-600">{fraudData.delivered} Deliv.</p>
-                            <p className="text-red-500">{fraudData.cancelled} Cancel</p>
+                        
+                        <div className="flex gap-2">
+                            <div className="flex-1 bg-green-100 p-2 rounded border border-green-200 text-center">
+                                <p className="text-[10px] font-bold text-green-700 uppercase">Delivered</p>
+                                <p className="text-lg font-bold text-green-800">{fraudData.delivered}</p>
+                            </div>
+                            <div className="flex-1 bg-red-100 p-2 rounded border border-red-200 text-center">
+                                <p className="text-[10px] font-bold text-red-700 uppercase">Cancelled</p>
+                                <p className="text-lg font-bold text-red-800">{fraudData.cancelled}</p>
+                            </div>
                         </div>
                     </div>
                     <button onClick={() => setFraudData(null)} className="text-[10px] text-gray-400 underline w-full text-center">Reset Check</button>
