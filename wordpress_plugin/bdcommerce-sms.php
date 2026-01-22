@@ -2,8 +2,8 @@
 /**
  * Plugin Name: BdCommerce SMS Manager
  * Plugin URI:  https://bdcommerce.com
- * Description: A complete SMS & Customer Management solution. Sync customers and send Bulk SMS by relaying requests through your Main Dashboard. Includes Live Capture & Fraud Check.
- * Version:     1.5.0
+ * Description: A complete SMS & Customer Management solution. Sync customers and send Bulk SMS by relaying requests through your Main Dashboard. Includes Live Capture & Fraud Check in Orders.
+ * Version:     1.9.4
  * Author:      BdCommerce
  * License:     GPL2
  */
@@ -20,6 +20,13 @@ class BDC_SMS_Manager {
         global $wpdb;
         $this->table_name = $wpdb->prefix . 'bdc_customers';
 
+        // Declare HPOS Compatibility
+        add_action( 'before_woocommerce_init', function() {
+            if ( class_exists( \Automattic\WooCommerce\Utilities\FeaturesUtil::class ) ) {
+                \Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility( 'custom_order_tables', __FILE__, true );
+            }
+        } );
+
         // Hooks
         register_activation_hook( __FILE__, array( $this, 'create_tables' ) );
         add_action( 'admin_menu', array( $this, 'add_admin_menu' ) );
@@ -33,9 +40,15 @@ class BDC_SMS_Manager {
         // Live Capture Injection
         add_action( 'wp_footer', array( $this, 'inject_live_capture_script' ) );
 
-        // WooCommerce Order Column Hook (Fraud Check)
+        // WooCommerce Order Column Hooks (Legacy & HPOS)
         add_filter( 'manage_edit-shop_order_columns', array( $this, 'add_fraud_check_column' ) );
-        add_action( 'manage_shop_order_posts_custom_column', array( $this, 'render_fraud_check_column' ), 10, 2 );
+        add_action( 'manage_shop_order_posts_custom_column', array( $this, 'render_fraud_check_column_legacy' ), 10, 2 );
+        
+        add_filter( 'manage_woocommerce_page_wc-orders_columns', array( $this, 'add_fraud_check_column' ) );
+        add_action( 'manage_woocommerce_page_wc-orders_custom_column', array( $this, 'render_fraud_check_column_hpos' ), 10, 2 );
+
+        // FRAUD GUARD: Checkout Validation Hook (Consolidated)
+        add_action( 'woocommerce_checkout_process', array( $this, 'execute_fraud_guard_checks' ) );
     }
 
     /**
@@ -80,41 +93,261 @@ class BDC_SMS_Manager {
      * Register Settings
      */
     public function register_settings() {
+        // Main Config
         register_setting( 'bdc_sms_group', 'bdc_dashboard_url' );
+        
+        // Fraud Guard Settings
+        register_setting( 'bdc_fraud_group', 'bdc_fraud_phone_validation' ); // 11 Digit Check
+        register_setting( 'bdc_fraud_group', 'bdc_fraud_history_check' ); // Enable History Check
+        register_setting( 'bdc_fraud_group', 'bdc_fraud_min_rate' ); // Min % Threshold
+    }
+
+    /**
+     * FRAUD GUARD: Execute All Checks
+     */
+    public function execute_fraud_guard_checks() {
+        $billing_phone = isset( $_POST['billing_phone'] ) ? $_POST['billing_phone'] : '';
+        $clean_phone = preg_replace( '/[^0-9]/', '', $billing_phone );
+
+        // 1. Validate 11-Digit Length
+        if ( get_option( 'bdc_fraud_phone_validation' ) ) {
+            if ( strlen( $clean_phone ) < 11 ) {
+                wc_add_notice( __( '<strong>Fraud Guard:</strong> Please enter a valid 11-digit mobile number.', 'bdc-sms' ), 'error' );
+                return; // Stop here if length is invalid
+            }
+        }
+
+        // 2. Validate Delivery History Success Rate
+        if ( get_option( 'bdc_fraud_history_check' ) ) {
+            $api_base = $this->get_api_base_url();
+            if ( ! $api_base ) return;
+
+            // Call Dashboard API to check history
+            $response = wp_remote_get( $api_base . '/check_fraud.php?phone=' . $clean_phone, array( 'timeout' => 3 ) );
+
+            if ( ! is_wp_error( $response ) && wp_remote_retrieve_response_code( $response ) === 200 ) {
+                $body = wp_remote_retrieve_body( $response );
+                $data = json_decode( $body, true );
+
+                if ( isset( $data['success_rate'] ) && isset( $data['total_orders'] ) ) {
+                    $total_orders = intval( $data['total_orders'] );
+                    $success_rate = floatval( $data['success_rate'] );
+                    $min_rate = intval( get_option( 'bdc_fraud_min_rate', 50 ) ); // Default 50%
+
+                    // Only block if they have history (total_orders > 0) AND rate is below threshold
+                    if ( $total_orders > 0 && $success_rate < $min_rate ) {
+                        wc_add_notice( sprintf( __( '<strong>Order Restricted:</strong> Based on delivery history, your account does not meet the minimum success rate of %d%% (Your Rate: %d%%). Please contact support or pay in advance.', 'bdc-sms' ), $min_rate, intval($success_rate) ), 'error' );
+                    }
+                }
+            }
+        }
     }
 
     /**
      * Enqueue Scripts and Styles
      */
     public function enqueue_assets( $hook ) {
-        if ( 'toplevel_page_bdc-sms-manager' === $hook || 'edit.php' === $hook ) {
-            wp_enqueue_script( 'tailwindcss', 'https://cdn.tailwindcss.com', array(), '3.0', false );
+        $screen = get_current_screen();
+        
+        // Determine if we are on order page (Legacy or HPOS)
+        $is_order_page = ( 
+            ( $hook === 'edit.php' && isset($_GET['post_type']) && $_GET['post_type'] === 'shop_order' ) || 
+            ( $screen && $screen->id === 'woocommerce_page_wc-orders' ) 
+        );
+
+        if ( 'toplevel_page_bdc-sms-manager' === $hook || $is_order_page ) {
             
             // Script for Fraud Check Column (Only on order list page)
-            if( 'edit.php' === $hook && isset($_GET['post_type']) && $_GET['post_type'] === 'shop_order' ) {
+            if( $is_order_page ) {
+                // Add Professional Styles
+                wp_register_style( 'bdc-admin-styles', false );
+                wp_enqueue_style( 'bdc-admin-styles' );
+                $custom_css = "
+                    /* Fix Column Width to prevent overlap */
+                    .column-bdc_fraud_check { 
+                        width: 260px !important; 
+                        min-width: 260px !important; 
+                    }
+
+                    .bdc-fraud-wrapper { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+                    
+                    .bdc-fraud-result-card {
+                        background: #ffffff;
+                        border: 1px solid #e2e8f0;
+                        border-radius: 8px;
+                        padding: 12px;
+                        width: 100%;
+                        max-width: 240px;
+                        box-sizing: border-box;
+                        box-shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.05);
+                        margin-top: 5px;
+                        margin-bottom: 5px;
+                        position: relative;
+                        z-index: 10;
+                    }
+                    
+                    .bdc-fraud-top {
+                        display: flex;
+                        justify-content: space-between;
+                        align-items: flex-start;
+                        margin-bottom: 12px;
+                    }
+                    
+                    .bdc-rate-group {
+                        display: flex;
+                        flex-direction: column;
+                    }
+                    
+                    .bdc-rate-label {
+                        font-size: 10px;
+                        font-weight: 700;
+                        text-transform: uppercase;
+                        color: #64748b;
+                        letter-spacing: 0.5px;
+                        margin-bottom: 2px;
+                    }
+                    
+                    .bdc-rate-val {
+                        font-size: 20px;
+                        font-weight: 800;
+                        line-height: 1;
+                        display: flex;
+                        align-items: center;
+                        gap: 4px;
+                    }
+                    
+                    .bdc-total-orders {
+                        font-size: 10px;
+                        font-weight: 700;
+                        color: #1e293b;
+                        background: #f1f5f9;
+                        padding: 3px 6px;
+                        border-radius: 4px;
+                        white-space: nowrap;
+                    }
+                    
+                    .bdc-fraud-bottom {
+                        display: flex;
+                        gap: 6px;
+                    }
+                    
+                    .bdc-stat-box {
+                        flex: 1;
+                        padding: 6px;
+                        border-radius: 6px;
+                        text-align: center;
+                    }
+                    
+                    .bdc-stat-box.delivered {
+                        background: #dcfce7; /* Green 100 */
+                        border: 1px solid #bbf7d0;
+                    }
+                    
+                    .bdc-stat-box.cancelled {
+                        background: #fee2e2; /* Red 100 */
+                        border: 1px solid #fecaca;
+                    }
+                    
+                    .bdc-stat-title {
+                        font-size: 8px;
+                        font-weight: 800;
+                        text-transform: uppercase;
+                        letter-spacing: 0.5px;
+                        margin-bottom: 2px;
+                        display: block;
+                    }
+                    
+                    .bdc-stat-num {
+                        font-size: 14px;
+                        font-weight: 800;
+                        display: block;
+                    }
+                    
+                    .bdc-stat-box.delivered .bdc-stat-title { color: #166534; }
+                    .bdc-stat-box.delivered .bdc-stat-num { color: #15803d; }
+                    
+                    .bdc-stat-box.cancelled .bdc-stat-title { color: #991b1b; }
+                    .bdc-stat-box.cancelled .bdc-stat-num { color: #b91c1c; }
+                    
+                    /* Loading/Btn Styles */
+                    .bdc-fraud-check-btn { 
+                        display: inline-flex !important; align-items: center; gap: 6px; 
+                        padding: 6px 12px !important; border-radius: 6px !important;
+                        font-weight: 600 !important; font-size: 12px !important;
+                        background: #fff !important; border: 1px solid #cbd5e1 !important;
+                        color: #475569 !important; box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+                        transition: all 0.2s;
+                    }
+                    .bdc-fraud-check-btn:hover { border-color: #94a3b8 !important; color: #1e293b !important; }
+                    .bdc-fraud-check-btn .dashicons { font-size: 16px; width: 16px; height: 16px; }
+                    .bdc-loading { opacity: 0.7; pointer-events: none; }
+                    .bdc-spin { animation: bdc-spin 1s infinite linear; }
+                    @keyframes bdc-spin { 100% { transform: rotate(360deg); } }
+                ";
+                wp_add_inline_style( 'bdc-admin-styles', $custom_css );
+
                 $api_base = $this->get_api_base_url();
                 if($api_base) {
                     wp_add_inline_script('jquery', '
                         jQuery(document).ready(function($) {
-                            $(".bdc-fraud-check-btn").on("click", function(e) {
+                            $(document).on("click", ".bdc-fraud-check-btn", function(e) {
                                 e.preventDefault();
+                                e.stopPropagation();
                                 var btn = $(this);
                                 var phone = btn.data("phone");
-                                var target = btn.closest("div");
+                                var container = btn.closest(".bdc-fraud-wrapper");
                                 
-                                btn.text("Checking...");
+                                // Loading State
+                                btn.addClass("bdc-loading");
+                                btn.find(".text").text("Checking...");
+                                btn.find(".dashicons").addClass("bdc-spin").removeClass("dashicons-search").addClass("dashicons-update");
                                 
                                 $.get("' . esc_url($api_base . '/check_fraud.php') . '?phone=" + phone, function(data) {
+                                    btn.remove(); // Remove button
+                                    
                                     if(data.error) {
-                                        target.html("<span style=\"color:red\">Error</span>");
+                                        container.html("<span style=\"color:#d63638; font-weight:bold; font-size:11px;\">⚠️ API Error</span>");
                                         return;
                                     }
-                                    var color = data.success_rate > 80 ? "green" : (data.success_rate > 50 ? "orange" : "red");
-                                    var html = "<div style=\"font-weight:bold; color:" + color + "\">" + data.success_rate + "% Success</div>";
-                                    html += "<div style=\"font-size:10px; color:#666\">" + data.delivered + "/" + data.total_orders + " Delivered</div>";
-                                    target.html(html);
+                                    
+                                    var rate = parseFloat(data.success_rate);
+                                    var rateColor = rate >= 80 ? "#16a34a" : (rate < 50 ? "#dc2626" : "#ca8a04");
+                                    var shieldIcon = rate >= 80 ? "dashicons-shield" : (rate < 50 ? "dashicons-warning" : "dashicons-shield-alt");
+
+                                    var html = "<div class=\"bdc-fraud-result-card\">";
+                                    
+                                    // Top Row
+                                    html += "<div class=\"bdc-fraud-top\">";
+                                    html += "  <div class=\"bdc-rate-group\">";
+                                    html += "    <span class=\"bdc-rate-label\">Success Rate</span>";
+                                    html += "    <span class=\"bdc-rate-val\" style=\"color: " + rateColor + "\"><span class=\"dashicons " + shieldIcon + "\"></span> " + rate + "%</span>";
+                                    html += "  </div>";
+                                    html += "  <div class=\"bdc-total-orders\">" + data.total_orders + " Orders</div>";
+                                    html += "</div>";
+                                    
+                                    // Bottom Row
+                                    html += "<div class=\"bdc-fraud-bottom\">";
+                                    
+                                    // Delivered Box
+                                    html += "  <div class=\"bdc-stat-box delivered\">";
+                                    html += "    <span class=\"bdc-stat-title\">Delivered</span>";
+                                    html += "    <span class=\"bdc-stat-num\">" + data.delivered + "</span>";
+                                    html += "  </div>";
+                                    
+                                    // Cancelled Box
+                                    html += "  <div class=\"bdc-stat-box cancelled\">";
+                                    html += "    <span class=\"bdc-stat-title\">Cancelled</span>";
+                                    html += "    <span class=\"bdc-stat-num\">" + data.cancelled + "</span>";
+                                    html += "  </div>";
+                                    
+                                    html += "</div>"; // End Bottom
+                                    html += "</div>"; // End Card
+                                    
+                                    container.html(html);
                                 }).fail(function() {
-                                    target.html("<span style=\"color:red\">Failed</span>");
+                                    btn.removeClass("bdc-loading");
+                                    btn.find(".text").text("Retry");
+                                    btn.find(".dashicons").removeClass("bdc-spin dashicons-update").addClass("dashicons-warning");
                                 });
                             });
                         });
@@ -131,28 +364,53 @@ class BDC_SMS_Manager {
         $new_columns = array();
         foreach ( $columns as $key => $column ) {
             $new_columns[$key] = $column;
-            if ( 'order_total' === $key ) {
+            // Insert after Order Status
+            if ( 'order_status' === $key ) {
                 $new_columns['bdc_fraud_check'] = __( 'Fraud Check', 'bdc-sms' );
             }
+        }
+        if(!isset($new_columns['bdc_fraud_check'])) {
+             $new_columns['bdc_fraud_check'] = __( 'Fraud Check', 'bdc-sms' );
         }
         return $new_columns;
     }
 
     /**
-     * Render Custom Column Data
+     * Render Custom Column Data (Legacy)
      */
-    public function render_fraud_check_column( $column, $post_id ) {
+    public function render_fraud_check_column_legacy( $column, $post_id ) {
         if ( 'bdc_fraud_check' === $column ) {
             $order = wc_get_order( $post_id );
-            if ( $order ) {
-                $phone = $order->get_billing_phone();
-                if($phone) {
-                    echo '<div><button class="button small bdc-fraud-check-btn" data-phone="'.esc_attr($phone).'">Check</button></div>';
-                } else {
-                    echo '<span class="description">No Phone</span>';
-                }
-            }
+            $this->render_fraud_content( $order );
         }
+    }
+
+    /**
+     * Render Custom Column Data (HPOS)
+     */
+    public function render_fraud_check_column_hpos( $column, $order ) {
+        if ( 'bdc_fraud_check' === $column ) {
+            $this->render_fraud_content( $order );
+        }
+    }
+
+    /**
+     * Shared Content Renderer
+     */
+    private function render_fraud_content( $order ) {
+        if ( ! $order ) return;
+        $phone = $order->get_billing_phone();
+        $clean_phone = preg_replace('/[^0-9]/', '', $phone);
+        
+        echo '<div class="bdc-fraud-wrapper">';
+        if($clean_phone) {
+            echo '<button type="button" class="button button-small bdc-fraud-check-btn" data-phone="'.esc_attr($clean_phone).'">';
+            echo '<span class="dashicons dashicons-search"></span> <span class="text">Check History</span>';
+            echo '</button>';
+        } else {
+            echo '<span class="description" style="color:#aaa;">-</span>';
+        }
+        echo '</div>';
     }
 
     /**
@@ -175,18 +433,27 @@ class BDC_SMS_Manager {
     /**
      * Fetch Feature Flags from Dashboard API
      */
-    private function get_remote_features() {
+    private function get_remote_features( $force_refresh = false ) {
         $api_base = $this->get_api_base_url();
         if ( ! $api_base ) return [];
 
-        $cached_features = get_transient('bdc_remote_features');
-        if ( false !== $cached_features ) {
-            return $cached_features;
+        if ( ! $force_refresh ) {
+            $cached_features = get_transient('bdc_remote_features');
+            if ( false !== $cached_features ) {
+                return $cached_features;
+            }
         }
 
         $response = wp_remote_get( $api_base . '/features.php', array( 'timeout' => 5, 'sslverify' => false ) );
         
-        if ( is_wp_error( $response ) ) return [];
+        if ( is_wp_error( $response ) ) {
+            // If forced refresh fails, fall back to cache if available to avoid breaking UI
+            if ( $force_refresh ) {
+                $cached = get_transient('bdc_remote_features');
+                return $cached !== false ? $cached : [];
+            }
+            return [];
+        }
 
         $body = wp_remote_retrieve_body( $response );
         $features = json_decode( $body, true );
@@ -208,7 +475,8 @@ class BDC_SMS_Manager {
         $api_base = $this->get_api_base_url();
         if ( ! $api_base ) return;
 
-        $features = $this->get_remote_features();
+        // Use cached features for frontend performance
+        $features = $this->get_remote_features( false );
         if ( empty($features['live_capture']) || $features['live_capture'] !== true ) {
             return;
         }
@@ -339,11 +607,11 @@ class BDC_SMS_Manager {
         $customers = $wpdb->get_results( "SELECT * FROM $this->table_name ORDER BY id DESC" );
         $is_connected = $this->check_connection();
         
-        $features = $this->get_remote_features();
+        // Force refresh features on dashboard load
+        $features = $this->get_remote_features( true );
         
         include(plugin_dir_path(__FILE__) . 'admin-view.php');
     }
 }
 
 new BDC_SMS_Manager();
-?>
