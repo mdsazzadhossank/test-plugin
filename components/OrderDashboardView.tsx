@@ -5,7 +5,11 @@ import {
   ChevronDown, 
   Eye, 
   Trash2,
-  X
+  X,
+  ShieldCheck,
+  Loader2,
+  CheckCircle,
+  AlertTriangle
 } from 'lucide-react';
 import { Order, WCStatus } from '../types';
 import { CustomDatePicker } from './CustomDatePicker';
@@ -18,6 +22,64 @@ interface OrderDashboardViewProps {
 
 const formatWCStatus = (status: string) => {
   return status.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+};
+
+const FraudStatus: React.FC<{ phone: string }> = ({ phone }) => {
+  const [data, setData] = useState<{success_rate: number, total_orders: number, delivered: number, cancelled: number} | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const checkFraud = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setLoading(true);
+    try {
+        const res = await fetch(`api/check_fraud.php?phone=${phone}`);
+        const result = await res.json();
+        if (!result.error) {
+            setData(result);
+        }
+    } catch (e) {
+        console.error(e);
+    } finally {
+        setLoading(false);
+    }
+  };
+
+  if (loading) return <Loader2 className="animate-spin text-gray-400 mx-auto" size={16} />;
+
+  if (!data) {
+      return (
+          <button onClick={checkFraud} className="text-gray-400 hover:text-blue-600 transition-colors p-1" title="Check Delivery History">
+              <ShieldCheck size={18} className="mx-auto" />
+          </button>
+      );
+  }
+
+  const rate = parseFloat(data.success_rate as any);
+  let color = 'text-orange-600 bg-orange-50 border-orange-100';
+  let Icon = AlertTriangle;
+  
+  if (rate >= 80) {
+      color = 'text-green-600 bg-green-50 border-green-100';
+      Icon = CheckCircle;
+  } else if (rate < 50) {
+      color = 'text-red-600 bg-red-50 border-red-100';
+  }
+
+  return (
+      <div className={`relative group inline-flex items-center gap-1 px-2 py-1 rounded border text-[10px] font-bold ${color} cursor-default`}>
+          <Icon size={10} />
+          {rate}%
+          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-32 bg-gray-800 text-white text-[10px] p-2 rounded shadow-xl hidden group-hover:block z-50 text-center pointer-events-none">
+              <div className="font-bold border-b border-gray-600 pb-1 mb-1 text-xs">History</div>
+              <div className="grid grid-cols-2 gap-x-2 text-left">
+                  <span className="text-gray-400">Total:</span> <span className="text-right">{data.total_orders}</span>
+                  <span className="text-green-400">Delivered:</span> <span className="text-right">{data.delivered}</span>
+                  <span className="text-red-400">Cancel:</span> <span className="text-right">{data.cancelled}</span>
+              </div>
+              <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-gray-800"></div>
+          </div>
+      </div>
+  );
 };
 
 const StatusDropdown: React.FC<{ 
@@ -214,6 +276,7 @@ export const OrderDashboardView: React.FC<OrderDashboardViewProps> = ({ orders, 
               <th className="px-6 py-4 text-xs font-medium text-gray-400">Payment</th>
               <th className="px-6 py-4 text-xs font-medium text-gray-400">Amount</th>
               <th className="px-6 py-4 text-xs font-medium text-gray-400 text-center">Action</th>
+              <th className="px-6 py-4 text-xs font-medium text-gray-400 text-center">History</th>
               <th className="px-6 py-4 text-xs font-medium text-gray-400 text-center">Status</th>
               <th className="px-6 py-4 text-xs font-medium text-gray-400 text-right">More</th>
             </tr>
@@ -246,6 +309,9 @@ export const OrderDashboardView: React.FC<OrderDashboardViewProps> = ({ orders, 
                   </span>
                 </td>
                 <td className="px-6 py-5 text-center">
+                  <FraudStatus phone={order.customer.phone} />
+                </td>
+                <td className="px-6 py-5 text-center">
                   <StatusDropdown 
                     currentStatus={order.status} 
                     onSelect={(status) => onUpdateStatus(order.id, status)} 
@@ -275,7 +341,7 @@ export const OrderDashboardView: React.FC<OrderDashboardViewProps> = ({ orders, 
               </tr>
             )) : (
               <tr>
-                <td colSpan={9} className="px-6 py-12 text-center text-gray-400 italic">
+                <td colSpan={10} className="px-6 py-12 text-center text-gray-400 italic">
                   No orders found matching your search criteria
                 </td>
               </tr>

@@ -83,23 +83,19 @@ if (!$force_refresh) {
         $row = $result->fetch_assoc();
         $details = json_decode($row['data'], true);
         
-        // Recalculate delivered/cancelled from cached details if simple counts are needed but not stored separately
-        $delivered = 0;
-        $cancelled = 0;
-        
-        // Try to parse from cached breakdown string if possible, otherwise use success rate approximation
-        // Or assume the frontend uses the 'details' array to show list.
-        // For simple backward compat, we return calculated fields.
-        
-        // Since we didn't store raw counts in columns, let's extract from details text or approximation
-        // Ideally, we should add columns to the table, but let's stick to existing schema.
-        
+        // Recalculate from stored data if needed, or use stored counts if we add columns later.
+        // For now, estimating from success rate if specific counts aren't in JSON
+        $total = (int)$row['total_orders'];
+        $rate = (float)$row['success_rate'];
+        $delivered = round(($rate / 100) * $total);
+        $cancelled = $total - $delivered;
+
         echo json_encode([
             "source" => "cache",
-            "success_rate" => (float)$row['success_rate'],
-            "total_orders" => (int)$row['total_orders'],
-            "delivered" => round(((float)$row['success_rate'] / 100) * (int)$row['total_orders']), // Approximate
-            "cancelled" => (int)$row['total_orders'] - round(((float)$row['success_rate'] / 100) * (int)$row['total_orders']),
+            "success_rate" => $rate,
+            "total_orders" => $total,
+            "delivered" => $delivered, 
+            "cancelled" => $cancelled,
             "details" => $details
         ]);
         exit;
@@ -179,7 +175,7 @@ if ($steadfastConfig && !empty($steadfastConfig['email']) && !empty($steadfastCo
         $s_can = 0;
         $s_tot = 0;
 
-        // Logic 1: Summary Keys
+        // Logic 1: Summary Keys (Steadfast sometimes returns summary)
         if (isset($data['total_delivered'])) {
             $s_del = (int)$data['total_delivered'];
             $s_can = isset($data['total_cancelled']) ? (int)$data['total_cancelled'] : 0;
