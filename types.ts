@@ -90,6 +90,8 @@ export interface DashboardStats {
 export interface CourierConfig {
   apiKey: string;
   secretKey: string;
+  email?: string;
+  password?: string;
 }
 
 export interface PathaoConfig {

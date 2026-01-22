@@ -11,7 +11,7 @@ export const TopBar: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [activeTab, setActiveTab] = useState<'wp' | 'courier' | 'pathao' | 'bkash' | 'sms'>('wp');
   const [config, setConfig] = useState<WPConfig>({ url: '', consumerKey: '', consumerSecret: '' });
-  const [courierConfig, setCourierConfig] = useState<CourierConfig>({ apiKey: '', secretKey: '' });
+  const [courierConfig, setCourierConfig] = useState<CourierConfig>({ apiKey: '', secretKey: '', email: '', password: '' });
   const [pathaoConfig, setPathaoConfig] = useState<PathaoConfig>({
     clientId: '', clientSecret: '', username: '', password: '', storeId: '', isSandbox: true, webhookSecret: ''
   });
@@ -249,6 +249,32 @@ export const TopBar: React.FC = () => {
                       value={courierConfig.secretKey}
                       onChange={(e) => setCourierConfig({...courierConfig, secretKey: e.target.value})}
                     />
+                  </div>
+
+                  <div className="bg-orange-50 p-3 rounded-lg border border-orange-100 mt-2 mb-2">
+                    <p className="text-[10px] text-orange-700 font-bold mb-2 uppercase">For Global Fraud Check (Login)</p>
+                    <div className="space-y-2">
+                        <div className="space-y-1">
+                            <label className="text-[10px] font-bold text-gray-400 uppercase">Email</label>
+                            <input 
+                            type="email" 
+                            placeholder="Steadfast Account Email"
+                            className="w-full p-2 bg-white border border-gray-200 rounded-lg text-xs outline-none focus:border-orange-500"
+                            value={courierConfig.email || ''}
+                            onChange={(e) => setCourierConfig({...courierConfig, email: e.target.value})}
+                            />
+                        </div>
+                        <div className="space-y-1">
+                            <label className="text-[10px] font-bold text-gray-400 uppercase">Password</label>
+                            <input 
+                            type="password" 
+                            placeholder="Steadfast Account Password"
+                            className="w-full p-2 bg-white border border-gray-200 rounded-lg text-xs outline-none focus:border-orange-500"
+                            value={courierConfig.password || ''}
+                            onChange={(e) => setCourierConfig({...courierConfig, password: e.target.value})}
+                            />
+                        </div>
+                    </div>
                   </div>
 
                   <div className="pt-2 border-t border-gray-100 mt-2 space-y-3">
