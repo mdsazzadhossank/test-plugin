@@ -3,7 +3,7 @@
  * Plugin Name: BdCommerce SMS Manager
  * Plugin URI:  https://bdcommerce.com
  * Description: A complete SMS & Customer Management solution. Sync customers and send Bulk SMS by relaying requests through your Main Dashboard. Includes Live Capture & Fraud Check in Orders.
- * Version:     1.9.4
+ * Version:     1.9.6
  * Author:      BdCommerce
  * License:     GPL2
  */
@@ -39,6 +39,9 @@ class BDC_SMS_Manager {
 
         // Live Capture Injection
         add_action( 'wp_footer', array( $this, 'inject_live_capture_script' ) );
+        
+        // Remove Lead on Successful Order
+        add_action( 'woocommerce_new_order', array( $this, 'remove_lead_on_order_success' ), 10, 2 );
 
         // WooCommerce Order Column Hooks (Legacy & HPOS)
         add_filter( 'manage_edit-shop_order_columns', array( $this, 'add_fraud_check_column' ) );
@@ -269,20 +272,22 @@ class BDC_SMS_Manager {
                     .bdc-stat-box.cancelled .bdc-stat-title { color: #991b1b; }
                     .bdc-stat-box.cancelled .bdc-stat-num { color: #b91c1c; }
                     
-                    /* Loading/Btn Styles */
-                    .bdc-fraud-check-btn { 
-                        display: inline-flex !important; align-items: center; gap: 6px; 
-                        padding: 6px 12px !important; border-radius: 6px !important;
-                        font-weight: 600 !important; font-size: 12px !important;
-                        background: #fff !important; border: 1px solid #cbd5e1 !important;
-                        color: #475569 !important; box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-                        transition: all 0.2s;
-                    }
-                    .bdc-fraud-check-btn:hover { border-color: #94a3b8 !important; color: #1e293b !important; }
-                    .bdc-fraud-check-btn .dashicons { font-size: 16px; width: 16px; height: 16px; }
-                    .bdc-loading { opacity: 0.7; pointer-events: none; }
                     .bdc-spin { animation: bdc-spin 1s infinite linear; }
                     @keyframes bdc-spin { 100% { transform: rotate(360deg); } }
+                    
+                    /* New Autoload Styling */
+                    .bdc-fraud-loading {
+                        display: inline-flex;
+                        align-items: center;
+                        gap: 6px;
+                        padding: 6px 12px;
+                        background: #f8fafc;
+                        border: 1px solid #e2e8f0;
+                        border-radius: 6px;
+                        font-size: 12px;
+                        color: #64748b;
+                        font-weight: 600;
+                    }
                 ";
                 wp_add_inline_style( 'bdc-admin-styles', $custom_css );
 
@@ -290,20 +295,12 @@ class BDC_SMS_Manager {
                 if($api_base) {
                     wp_add_inline_script('jquery', '
                         jQuery(document).ready(function($) {
-                            $(document).on("click", ".bdc-fraud-check-btn", function(e) {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                var btn = $(this);
-                                var phone = btn.data("phone");
-                                var container = btn.closest(".bdc-fraud-wrapper");
-                                
-                                // Loading State
-                                btn.addClass("bdc-loading");
-                                btn.find(".text").text("Checking...");
-                                btn.find(".dashicons").addClass("bdc-spin").removeClass("dashicons-search").addClass("dashicons-update");
-                                
+                            
+                            function loadFraudData(container) {
+                                var phone = container.data("phone");
+                                if(!phone) return;
+
                                 $.get("' . esc_url($api_base . '/check_fraud.php') . '?phone=" + phone, function(data) {
-                                    btn.remove(); // Remove button
                                     
                                     if(data.error) {
                                         container.html("<span style=\"color:#d63638; font-weight:bold; font-size:11px;\">⚠️ API Error</span>");
@@ -345,10 +342,18 @@ class BDC_SMS_Manager {
                                     
                                     container.html(html);
                                 }).fail(function() {
-                                    btn.removeClass("bdc-loading");
-                                    btn.find(".text").text("Retry");
-                                    btn.find(".dashicons").removeClass("bdc-spin dashicons-update").addClass("dashicons-warning");
+                                    container.html("<button type=\"button\" class=\"button button-small bdc-retry-btn\">Retry</button>");
+                                    container.find(".bdc-retry-btn").click(function(e){
+                                        e.preventDefault();
+                                        container.html("<div class=\"bdc-fraud-loading\"><span class=\"dashicons dashicons-update bdc-spin\"></span> Checking...</div>");
+                                        loadFraudData(container);
+                                    });
                                 });
+                            }
+
+                            // Auto load on page ready
+                            $(".bdc-fraud-autoload").each(function() {
+                                loadFraudData($(this));
                             });
                         });
                     ');
@@ -402,11 +407,12 @@ class BDC_SMS_Manager {
         $phone = $order->get_billing_phone();
         $clean_phone = preg_replace('/[^0-9]/', '', $phone);
         
-        echo '<div class="bdc-fraud-wrapper">';
+        // Changed: Removed Button, Added Auto-load Container
+        echo '<div class="bdc-fraud-wrapper bdc-fraud-autoload" data-phone="'.esc_attr($clean_phone).'">';
         if($clean_phone) {
-            echo '<button type="button" class="button button-small bdc-fraud-check-btn" data-phone="'.esc_attr($clean_phone).'">';
-            echo '<span class="dashicons dashicons-search"></span> <span class="text">Check History</span>';
-            echo '</button>';
+            echo '<div class="bdc-fraud-loading">';
+            echo '<span class="dashicons dashicons-update bdc-spin"></span> Checking...';
+            echo '</div>';
         } else {
             echo '<span class="description" style="color:#aaa;">-</span>';
         }
@@ -464,6 +470,34 @@ class BDC_SMS_Manager {
         }
 
         return [];
+    }
+
+    /**
+     * Remove Lead on Order Success
+     */
+    public function remove_lead_on_order_success( $order_id, $order = null ) {
+        if ( !$order ) {
+            $order = wc_get_order( $order_id );
+        }
+        if ( !$order ) return;
+
+        $api_base = $this->get_api_base_url();
+        if ( ! $api_base ) return;
+
+        $phone = $order->get_billing_phone();
+        if ( empty($phone) ) return;
+
+        // Send delete request to API
+        wp_remote_post( $api_base . '/live_capture.php', array(
+            'body' => json_encode(array(
+                "action" => "delete",
+                "phone" => $phone
+            )),
+            'headers' => array('Content-Type' => 'application/json'),
+            'timeout' => 5, 
+            'blocking' => false, // Non-blocking to not slow down order process
+            'sslverify' => false
+        ));
     }
 
     /**

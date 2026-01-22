@@ -12,7 +12,8 @@ import {
   MessageSquare,
   ShoppingCart,
   Zap,
-  Sliders
+  Sliders,
+  Search
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -294,13 +295,24 @@ export const Sidebar: React.FC<SidebarProps> = ({ activePage, onNavigate, status
           }}
         />
 
-        {/* NEW: Plugin Control */}
         <SidebarItem 
           icon={<Sliders size={18} />} 
           label="Plugin Control" 
           active={activePage === 'plugin-control'}
           onClick={() => {
             onNavigate('plugin-control');
+            setIsOrderOpen(false);
+            setIsProductsOpen(false);
+          }}
+        />
+
+        {/* NEW: Phone Search */}
+        <SidebarItem 
+          icon={<Search size={18} />} 
+          label="Phone Search" 
+          active={activePage === 'phone-search'}
+          onClick={() => {
+            onNavigate('phone-search');
             setIsOrderOpen(false);
             setIsProductsOpen(false);
           }}

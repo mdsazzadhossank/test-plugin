@@ -15,6 +15,7 @@ import { CustomerListView } from './components/CustomerListView';
 import { BuySMSView } from './components/BuySMSView';
 import { LeadsView } from './components/LeadsView';
 import { PluginControlView } from './components/PluginControlView';
+import { PhoneSearchView } from './components/PhoneSearchView';
 import { 
   DollarSign, 
   CreditCard, 
@@ -408,6 +409,8 @@ const App: React.FC = () => {
         return <LeadsView />;
       case 'plugin-control':
         return <PluginControlView />;
+      case 'phone-search':
+        return <PhoneSearchView />;
       default:
         return <DashboardContent stats={stats} loadingInsights={loadingInsights} aiInsights={aiInsights} statusCounts={statusCounts} loadingData={loadingData} syncProgress={syncProgress} onRefresh={() => loadAllData()} hasConfig={hasConfig} />;
     }
